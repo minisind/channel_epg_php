@@ -281,7 +281,7 @@ function redirect($url, $time = 0, $msg = '') {
  */
 function get_exten_catetory($exten) {
     if ($exten) {
-        $filetypes = array('zip' => array('zip', 'rar', '7-zip', 'tar', 'gz', 'gzip'), 'doc' => array('txt', 'rtf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'wps', 'et'), 'script' => array('php', 'js', 'css', 'c'), 'image' => array('jpg', 'jpeg', 'png', 'gif', 'tiff', 'psd', 'bmp', 'ico'));
+        $filetypes = array('zip' => array('zip', 'rar', '7-zip', 'tar', 'gz', 'gzip'), 'doc' => array('txt', 'rtf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'wps', 'et'), 'script' => array('php', 'js', 'css', 'c', 'json'), 'image' => array('jpg', 'jpeg', 'png', 'gif', 'tiff', 'psd', 'bmp', 'ico'));
         foreach ($filetypes as $catetory => $extens) {
             if (in_array($exten, $extens)) {
                 return $catetory;
