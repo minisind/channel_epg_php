@@ -1,307 +1,295 @@
 <?php
 /**
- * // epg.php 按需返回不同格式的节目数据
- * // 2024年1月10日 16:53:24
- * // author: aming.ou QQ3364776
- * // http://127.0.0.1/epg.php?channel=cctv2&date=20231218          #for sptv json
- * // http://127.0.0.1/epg.php?ch=CCTV1&date=2023-12-18             #for diyp json
- * // http://127.0.0.1/epg.php?ch=xml // Provided by: QQ 791019898  #for iptv xml
- */ 
-// 运行参数
-error_reporting(0);
-$utf8 = false; // true输出utf8编码, false输出unicode编码
-$iscache = false; //如果开启了memcached服务, 建议设置为true,否则设置false
-$cachehour = 2; //当天后的epg数据缓存小时数,建议根据xml同步周期进行设置, 推荐2小时
-$debug = !empty($_GET["debug"]) ? true : false;
-// 传入参数
-$riqi = !empty($_GET["date"]) ? $_GET["date"] : date("Y-m-d");
-$ch = !empty($_GET["ch"]) ? $_GET["ch"] : $_GET["channel"];
-$ch = empty($ch) ? 'CCTV1' : $ch;
-// 'diyp' ,返回DIYP final版的epg数据, sptv 返回超级直播的epg数据, 默认返回DIYP epg格式
-$tvapp = !empty($_GET["channel"]) ? 'sptv' : 'diyp';
+ * 安全增强版 EPG 接口
+ * 支持 XMLTV / DIYP / SPTV 三种格式
+ * 修复 SQL 注入、跨天逻辑、时区等问题
+ * 适配 OpenWrt 路由器环境
+ */
 
-if ($debug){
-	echo var_dump($utf8) . "<br>" . $riqi . "<br>" . $ch . "<br>" . $tvapp . "<br>"  ;
-	$iscache = false; // 测试模式,关闭缓存
+error_reporting(0);
+
+// ========== 配置 ==========
+$utf8 = false;           // true: UTF-8, false: Unicode (JSON_UNESCAPED_UNICODE)
+$iscache = false;        // 是否启用缓存（OpenWrt 通常无 memcached，建议 false）
+$cachehour = 2;          // 未来数据缓存小时数
+$debug = !empty($_GET["debug"]);
+$isw_log = false;        // 是否写入 access_log（建议 false，保护闪存）
+
+// ========== 输入处理 ==========
+$riqi = trim($_GET["date"] ?? '');
+$ch    = trim($_GET["ch"] ?? $_GET["channel"] ?? 'CCTV1');
+
+// 自动转换 YYYYMMDD → YYYY-MM-DD
+if ($riqi && strlen($riqi) === 8 && ctype_digit($riqi)) {
+    $riqi = substr($riqi, 0, 4) . '-' . substr($riqi, 4, 2) . '-' . substr($riqi, 6, 2);
+}
+if (!$riqi) {
+    $riqi = date('Y-m-d');
 }
 
-// 数据库连接串
-class ChannelDB extends SQLite3
-{
-	static $isw = false; // $isw = true 时写入访问日志, $isw = false时不写入日志,建议调测时设置为true,正式使用时设置为false,加快epg显示速度
-	function __construct()
-	{ 
-		// 根据项目修改sqlite数据库名
-		$sdb = "channel_epg.db"; 
-		$this->open($sdb, self::$isw ? SQLITE3_OPEN_READWRITE : SQLITE3_OPEN_READONLY);
-	}
-    public static function isw()
-    {
-        return self::$isw;
+// 格式判断：sptv 还是 diyp？
+$tvapp = isset($_GET["channel"]) ? 'sptv' : 'diyp';
+
+if ($debug) {
+    echo "Debug Info:<br>";
+    echo "ch={$ch}, date={$riqi}, format={$tvapp}<br><br>";
+    $iscache = false;
+}
+
+// ========== 数据库类 ==========
+class ChannelDB extends SQLite3 {
+    private static $log_enabled = false;
+
+    public function __construct() {
+        $db_path = __DIR__ . '/channel_epg.db';
+        if (!file_exists($db_path)) {
+            http_response_code(500);
+            die('Database not found.');
+        }
+        $this->open($db_path, self::$log_enabled ? SQLITE3_OPEN_READWRITE : SQLITE3_OPEN_READONLY);
+    }
+
+    public static function setLogEnabled($enabled) {
+        self::$log_enabled = (bool)$enabled;
+    }
+
+    public static function isLogEnabled() {
+        return self::$log_enabled;
     }
 }
-// 自适应日期格式 YYYYMMDD 转换为 YYYY-MM-DD
-if (strlen($riqi) == 8)
-{
-	$string = $riqi;
-	$year = substr($string, 0, 4);
-	$month = substr($string, 4, 2);
-	$day = substr($string, 6, 2);
-	$riqi = $year . "-" . $month . "-" . $day;
-}
-$isnewDate = strtotime($riqi) >= strtotime(date("Y-m-d")) ? true : false;
 
-if ($iscache)
-{
-	if (class_exists('Memcache'))
-	{
-		$memcache = new Memcache;
-		if (!@$memcache->connect('localhost', 11211))
-		{
-			$iscache = false;
-		}
-		if ($iscache)
-		{
-			$key = md5($ch . '|' . $riqi . '|' . $tvapp);
-			$cache_result = $memcache->get($key);
-			if ($cache_result)
-			{	
-				if (!$debug){
-					if ($ch === 'xml')
-					{
-						header_remove();
-						header('Content-Type: text/xml; charset=utf-8');
-						header('Content-Disposition: attachment; filename=epg.xml');
-					}else{
-						header_remove();
-						header('Content-type: application/json');
-						header('Content-Disposition: attachment; filename=epg.json');
-					}
-				}
-				echo $cache_result;
-				return;
-			}
-		}
-	}
-	else
-	{
-		$iscache = false;
-	}
-}
-$config = array();
-$channel = new ChannelDB();
-$isw = $channel->isw();
+ChannelDB::setLogEnabled($isw_log);
 
-$group = 'xxxxx';
-// --写入日志-开始--------------------------------------------------
-// 当前IP
-$ip = $_SERVER['REMOTE_ADDR'];
-$time = date("Y-m-d H:i:s"); 
-// 当前url
-$url = $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']; 
-// 获取最后来源地址
-if (empty($_SERVER['HTTP_REFERER']))
-{
-	$source_link = $url;
-}
-else
-{
-	$source_link = $_SERVER['HTTP_REFERER'];
-}
-$source_link = urldecode($source_link);
-// 将IP地址记录到日志文件或数据库中
-if ($isw) $channel->exec("INSERT or ignore INTO access_log (ip_address,access_time,url) VALUES ('N{$ip}','{$time}','{$source_link}');");
-// --写入日志-结束--------------------------------------------------
+// ========== 缓存初始化 ==========
+$use_cache = false;
+$memcache = null;
+$cache_key = '';
 
-// 开始处理epg数据
-if ($ch === 'xml')
-{ 
-	// iptv xml format
-	// Provided by: QQ 791019898
-	// 初始化 XMLTV 数据
-	$channel_data = array();
-	$programme_data = array(); 
-	$channels = array();
-	// 获取今天开始的所有频道节目数据,并去重
-	$sql = "SELECT DISTINCT e.channel, e.title, e.sdate, e.sstart, e.sstop
-			FROM epg_programme e where e.sdate >= '" . $riqi . "' and e.channel in (select DISTINCT channel_id from epg_channel)" ;
-	$retval = $channel->query($sql);
-	while ($row = $retval->fetchArray())
-	{ 
-		// 整理节目信息
-		$channel_id = $row['channel'];
-		if (!isset($channels[$channel_id]))
-		{
-			$channels[$channel_id] = 0;
-		}
-		$channels[$channel_id]++ ;
-		// 提取开始和结束时间的小时部分
-		$start_hour = (int)substr($row['sstart'], 0, 2);
-		$stop_hour = (int)substr($row['sstop'], 0, 2);
-		
-		// 计算开始和结束时间
-		$start_time = date('YmdHis O', strtotime($row['sdate'] . ' ' . $row['sstart']));
-		
-		// 如果结束时间的小时比开始时间的小时小，说明跨天，日期加1
-		$end_date = $row['sdate'];
-		if ($stop_hour < $start_hour) {
-			$end_date = date('Y-m-d', strtotime($row['sdate'] . ' +1 day'));
-		}
-		$end_time = date('YmdHis O', strtotime($end_date . ' ' . $row['sstop']));
-		$programme_data[] = "\t<programme channel=\"$channel_id\" start=\"$start_time\" stop=\"$end_time\">\n\t\t<title lang=\"zh\">" . htmlspecialchars($row['title']) . "</title>\n\t</programme>";
-	} 
-	// 获取所有频道数据
-	$sql = "SELECT c.* FROM epg_channel c;" ;
-	$retval = $channel->query($sql);
-	while ($row = $retval->fetchArray())
-	{ 
-		// 添加频道信息（如果尚未添加）
-		$channel_name = $row['name'];
-		$channel_id = $row['channel_id'];
-		if (isset($channels[$channel_id]) && !isset($channel_data[$channel_name]))
-		{
-			$channel_data[$channel_name] = "\t<channel id=\"$channel_id\">\n\t\t<display-name lang=\"zh\">$channel_name</display-name>\n\t</channel>";
-		}
-	} 
-	// 输出 XMLTV 数据
-	$xmltv_data = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv generator-info-name=\"epg\" generator-info-url=\"epg.php?ch=xml\">\n" . implode("\n", $channel_data) . "\n" . implode("\n", $programme_data) . "\n</tv>"; 
-	// 如果开启了缓存
-	if ($iscache)
-	{
-		$memcache->set($key, $xmltv_data, MEMCACHE_COMPRESSED, 3600 * $cachehour);
-	} 
-	// 输出 XMLTV 数据
-	if (!$debug){
-	header_remove();
-	header('Content-Type: text/xml; charset=utf-8');
-	header('Content-Disposition: attachment; filename=epg.xml');}
-	echo $xmltv_data;
+if ($iscache && class_exists('Memcache')) {
+    $memcache = new Memcache();
+    if (@$memcache->connect('localhost', 11211)) {
+        $cache_key = md5($ch . '|' . $riqi . '|' . $tvapp);
+        $cached = $memcache->get($cache_key);
+        if ($cached !== false) {
+            if (!$debug) {
+                if ($ch === 'xml') {
+                    header('Content-Type: text/xml; charset=utf-8');
+                    header('Content-Disposition: attachment; filename=epg.xml');
+                } else {
+                    header('Content-Type: application/json; charset=utf-8');
+                    header('Content-Disposition: attachment; filename=epg.json');
+                }
+            }
+            echo $cached;
+            exit;
+        }
+        $use_cache = true;
+    }
 }
-else
-{ 
-	// diyp $ sptv format
-	// 查询频道名对应的节目单是否存在
-	$sql = "SELECT DISTINCT * FROM epg_programme WHERE channel = (SELECT channel_id  FROM epg_channel where upper(name)='" . strtoupper($ch) . "' limit 1) AND sdate = '" . $riqi . "'";
-	$is_found = 0;
-	$retval = $channel->query($sql);
-	while ($row = $retval->fetchArray())
-	{
-		$is_found = 1;
-		if ($tvapp == 'sptv')
-		{
-			// 提取开始和结束时间的小时部分
-			$start_hour = (int)substr($row['sstart'], 0, 2);
-			$stop_hour = (int)substr($row['sstop'], 0, 2);
-			
-			// 如果结束时间的小时比开始时间的小时小，说明跨天，结束日期加1
-			$end_date = $riqi;
-			if ($stop_hour < $start_hour) {
-				$end_date = date('Y-m-d', strtotime($riqi . ' +1 day'));
-			}
-			
-			// 计算开始和结束时间戳
-			$start_timestamp = strtotime($riqi . ' ' . $row['sstart']);
-			$end_timestamp = strtotime($end_date . ' ' . $row['sstop']);
-			
-			$epg_data2s[] = array("eventId" => "",
-				"showTime" => gmdate('H:i', ($end_timestamp - $start_timestamp)),
-				"eventType" => "",
-				"st" => $start_timestamp,
-				"t" => $row['title'],
-				"duration" => ($end_timestamp - $start_timestamp),
-				"et" => $end_timestamp
-				);
-		}
-		else
-		{
-			$epg_datas[] = array("start" => $row['sstart'],
-				"end" => ($row['sstop'] == "23:59" ? "00:00" : $row['sstop']),
-				"title" => $row['title'],
-				"desc" => ""
-				);
-		}
-	}
-	if ($is_found == 1)
-	{
-		if ($tvapp == 'sptv')
-		{
-			$age = ["$ch" => array("isLive" => "",
-				"liveSt" => "",
-				"program" => $epg_data2s,
-				"channelName" => "$ch",
-				"lvUrl" => ""
-				)];
-		}
-		else
-		{
-			$age = array("channel_name" => "$ch",
-				"date" => "$riqi",
-				"epg_data" => $epg_datas
-				);
-		}
-		$jsonage = $utf8 ? json_encode($age) : json_encode($age, JSON_UNESCAPED_UNICODE);
-	}
-	else
-	{ 
-		// 空节目表，可用以回看定位
-		for($i = 0;
-			$i <= 23;
-			$i++)
-		{
-			// 计算结束时间，当i=23时，i+1=24，使用%24运算后变为00
-			$end_hour = ($i + 1) % 24;
-			// 处理跨天情况：当end_hour < i时，end时间的日期应该是$riqi + 1天
-			$end_riqi = $riqi;
-			if ($end_hour < $i) {
-				$end_riqi = date('Y-m-d', strtotime($riqi . ' +1 day'));
-			}
-			$epg_datas[] = array("start" => sprintf("%02d", $i) . ":00",
-				"end" => sprintf("%02d", $end_hour) . ":00",
-				"title" => "精彩节目",
-				"desc" => ""
-				);
-			$epg_data2s[] = array("eventId" => "",
-				"showTime" => gmdate('H:i', (strtotime($end_riqi . ' ' . sprintf("%02d:00", $end_hour)) - strtotime($riqi . ' ' . sprintf("%02d:00", $i)))),
-				"eventType" => "",
-				"st" => strtotime($riqi . ' ' . sprintf("%02d:00", $i)),
-				"t" => "精彩节目",
-				"duration" => (strtotime($end_riqi . ' ' . sprintf("%02d:00", $end_hour)) - strtotime($riqi . ' ' . sprintf("%02d:00", $i))),
-				"et" => strtotime($end_riqi . ' ' . sprintf("%02d:00", $end_hour))
-				);
-		}
-		if ($tvapp == 'sptv')
-		{
-			$age = ["$ch" => array("isLive" => "",
-				"liveSt" => "",
-				"program" => $epg_data2s,
-				"channelName" => "$ch",
-				"lvUrl" => ""
-				)];
-		}
-		else
-		{
-			$age = array("channel_name" => "$ch",
-				"date" => "$riqi",
-				"epg_data" => $epg_datas
-				);
-		}
-		$jsonage = $utf8 ? json_encode($age) : json_encode($age, JSON_UNESCAPED_UNICODE);
-	}
-	if ($iscache)
-	{
-		if ($isnewDate)
-		{
-			$memcache->set($key, $jsonage, MEMCACHE_COMPRESSED, 3600 * $cachehour);
-		}
-		else
-		{
-			$memcache->set($key, $jsonage, MEMCACHE_COMPRESSED, 3600 * 24 * 8);
-		}
-	}
-	if (!$debug){
-	header_remove();
-	header('Content-type: application/json');
-	header('Content-Disposition: attachment; filename=epg.json');}
-	echo $jsonage;
+
+// ========== 记录访问日志（可选）==========
+if ($isw_log) {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $time = date('Y-m-d H:i:s');
+    $url = ($_SERVER['HTTP_HOST'] ?? '') . ($_SERVER['REQUEST_URI'] ?? '');
+    $referer = $_SERVER['HTTP_REFERER'] ?? $url;
+    $referer = urldecode($referer);
+
+    try {
+        $db = new ChannelDB();
+        $stmt = $db->prepare("INSERT OR IGNORE INTO access_log (ip_address, access_time, url) VALUES (?, ?, ?)");
+        $stmt->bindValue(1, 'N' . $ip, SQLITE3_TEXT);
+        $stmt->bindValue(2, $time, SQLITE3_TEXT);
+        $stmt->bindValue(3, $referer, SQLITE3_TEXT);
+        $stmt->execute();
+        $db->close();
+    } catch (Exception $e) {
+        // 忽略日志写入失败
+    }
 }
+
+// ========== 主逻辑 ==========
+$db = new ChannelDB();
+
+if ($ch === 'xml') {
+    // ========== XMLTV 格式 ==========
+    $channels = [];
+    $programmes = [];
+
+    // 获取所有频道信息（用于 <channel>）
+    $stmt = $db->prepare("SELECT channel_id, name FROM epg_channel");
+    $result = $stmt->execute();
+    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+        $channels[$row['channel_id']] = $row['name'];
+    }
+
+    // 获取节目数据（从指定日期开始）
+    $stmt = $db->prepare("SELECT e.channel, e.title, e.sdate, e.sstart, e.sstop
+                          FROM epg_programme e
+                          WHERE e.sdate >= ?
+                          AND e.channel IN (SELECT DISTINCT channel_id FROM epg_channel)");
+    $stmt->bindValue(1, $riqi, SQLITE3_TEXT);
+    $result = $stmt->execute();
+
+    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+        $start_ts = strtotime($row['sdate'] . ' ' . $row['sstart']);
+        $stop_ts  = strtotime($row['sdate'] . ' ' . $row['sstop']);
+        if ($stop_ts <= $start_ts) {
+            $stop_ts += 86400; // 跨天
+        }
+
+        $start_str = date('YmdHis', $start_ts);
+        $stop_str  = date('YmdHis', $stop_ts);
+
+        $title = htmlspecialchars($row['title'], ENT_XML1, 'UTF-8');
+        $programmes[] = "\t<programme channel=\"{$row['channel']}\" start=\"{$start_str}\" stop=\"{$stop_str}\">\n\t\t<title lang=\"zh\">{$title}</title>\n\t</programme>";
+    }
+
+    // 构建 channel 列表（仅包含有节目的频道）
+    $channel_xml = [];
+    foreach ($channels as $id => $name) {
+        // 检查是否有该频道的节目
+        $has_program = false;
+        foreach ($programmes as $p) {
+            if (strpos($p, "channel=\"{$id}\"") !== false) {
+                $has_program = true;
+                break;
+            }
+        }
+        if ($has_program) {
+            $name_esc = htmlspecialchars($name, ENT_XML1, 'UTF-8');
+            $channel_xml[] = "\t<channel id=\"{$id}\">\n\t\t<display-name lang=\"zh\">{$name_esc}</display-name>\n\t</channel>";
+        }
+    }
+
+    $xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv generator-info-name=\"epg.php\" generator-info-url=\"http://your-router/epg.php?ch=xml\">\n";
+    $xml .= implode("\n", $channel_xml) . "\n";
+    $xml .= implode("\n", $programmes) . "\n</tv>";
+
+    if ($use_cache) {
+        $ttl = 3600 * $cachehour;
+        $memcache->set($cache_key, $xml, MEMCACHE_COMPRESSED, $ttl);
+    }
+
+    if (!$debug) {
+        header('Content-Type: text/xml; charset=utf-8');
+        header('Content-Disposition: attachment; filename=epg.xml');
+    }
+    echo $xml;
+
+} else {
+    // ========== JSON 格式（DIYP / SPTV）==========
+    $epg_datas = [];
+    $epg_data2s = [];
+    $is_found = false;
+
+    // 查询频道 ID
+    $stmt = $db->prepare("SELECT channel_id FROM epg_channel WHERE upper(name) = upper(?) LIMIT 1");
+    $stmt->bindValue(1, $ch, SQLITE3_TEXT);
+    $result = $stmt->execute();
+    $channel_row = $result->fetchArray(SQLITE3_ASSOC);
+
+    if ($channel_row) {
+        $channel_id = $channel_row['channel_id'];
+
+        // 查询节目
+        $stmt = $db->prepare("SELECT sstart, sstop, title FROM epg_programme 
+                              WHERE channel = ? AND sdate = ?");
+        $stmt->bindValue(1, $channel_id, SQLITE3_TEXT);
+        $stmt->bindValue(2, $riqi, SQLITE3_TEXT);
+        $result = $stmt->execute();
+
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $is_found = true;
+            $start_ts = strtotime($riqi . ' ' . $row['sstart']);
+            $stop_ts  = strtotime($riqi . ' ' . $row['sstop']);
+            if ($stop_ts <= $start_ts) {
+                $stop_ts += 86400;
+            }
+
+            if ($tvapp === 'sptv') {
+                $duration = $stop_ts - $start_ts;
+                $epg_data2s[] = [
+                    "eventId" => "",
+                    "showTime" => gmdate('H:i', $duration),
+                    "eventType" => "",
+                    "st" => $start_ts,
+                    "t" => $row['title'],
+                    "duration" => $duration,
+                    "et" => $stop_ts
+                ];
+            } else {
+                $end_time = ($row['sstop'] === '23:59') ? '00:00' : $row['sstop'];
+                $epg_datas[] = [
+                    "start" => $row['sstart'],
+                    "end" => $end_time,
+                    "title" => $row['title'],
+                    "desc" => ""
+                ];
+            }
+        }
+    }
+
+    if (!$is_found) {
+        // 生成空节目单（24 小时占位）
+        for ($i = 0; $i < 24; $i++) {
+            $start_h = sprintf('%02d', $i);
+            $end_h = sprintf('%02d', ($i + 1) % 24);
+            $start_ts = strtotime($riqi . " {$start_h}:00");
+            $end_ts = $start_ts + 3600;
+            if ($end_h === '00') $end_ts += 86400;
+
+            if ($tvapp === 'sptv') {
+                $epg_data2s[] = [
+                    "eventId" => "",
+                    "showTime" => "01:00",
+                    "eventType" => "",
+                    "st" => $start_ts,
+                    "t" => "精彩节目",
+                    "duration" => 3600,
+                    "et" => $end_ts
+                ];
+            } else {
+                $epg_datas[] = [
+                    "start" => "{$start_h}:00",
+                    "end" => "{$end_h}:00",
+                    "title" => "精彩节目",
+                    "desc" => ""
+                ];
+            }
+        }
+    }
+
+    if ($tvapp === 'sptv') {
+        $output = [$ch => [
+            "isLive" => "",
+            "liveSt" => "",
+            "program" => $epg_data2s,
+            "channelName" => $ch,
+            "lvUrl" => ""
+        ]];
+    } else {
+        $output = [
+            "channel_name" => $ch,
+            "date" => $riqi,
+            "epg_data" => $epg_datas
+        ];
+    }
+
+    $json_options = $utf8 ? 0 : JSON_UNESCAPED_UNICODE;
+    $json = json_encode($output, $json_options | JSON_INVALID_UTF8_IGNORE);
+
+    if ($use_cache) {
+        $ttl = (strtotime($riqi) >= strtotime(date('Y-m-d'))) ? (3600 * $cachehour) : (3600 * 24 * 8);
+        $memcache->set($cache_key, $json, MEMCACHE_COMPRESSED, $ttl);
+    }
+
+    if (!$debug) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename=epg.json');
+    }
+    echo $json;
+}
+
+$db->close();
 ?>
