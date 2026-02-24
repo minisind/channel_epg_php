@@ -1,12 +1,15 @@
 <?php 
 // xml2db.php 联网获取xml格式的节目表存如sqlite数据库,为本地提供DIYP epg接口服务
-// author: aming.ou
+// author:　minisind   from  oushaoming (aming.ou)
 // http://127.0.0.1/xml2db.php       同步xml数据
 // http://127.0.0.1/xml2db.php?db=1  仅创建数据库,不同步xml数据
 
+ini_set('memory_limit', '32M');
+ini_set('max_execution_time', 60);
+
 $save_all = 1; // 1 保存全量节目单, 0 仅保存list中频道相关的节目单
 $empty_tmp = 1; // 1 入库后清除临时表的数据, 0 保留临时表的数据,建议调测期间设置为0, 调测完毕后修改为1,减少存储空间
-$deleteoffset = -8; // 清理xx天前的节目数据
+$deleteoffset = -3; // 清理xx天前的节目数据
 $deletetoday = 1; // 更新数据前先删除当天节目数据
 error_reporting(1); // 禁止输出错误提示
 $displayname = 'display-name';
@@ -38,9 +41,9 @@ class ChannelDB extends SQLite3
 			$this->exec("CREATE TABLE if not exists 'tmp_epg_channel' ( `name` text, `channel_id` text)");
 			$this->exec("CREATE TABLE if not exists 'tmp_epg_programme' ( `title` text, `sdate` text, `sstart` text, `sstop` text, `channel` text, `sdesc` text, 'inserttime' text)"); 
 			// 初始化频道表样例数据
-			$this->exec("INSERT INTO `list` (`item`,`title`,`epg`,`url`,`isdel`) VALUES ('广东频道','广州综合','','http://nas.jdshipin.com:8801/gztv.php?id=zhonghe','90');");
-			$this->exec("INSERT INTO `list` (`item`,`title`,`epg`,`url`,`isdel`) VALUES ('广东频道','广州新闻','','http://nas.jdshipin.com:8801/gztv.php?id=xinwen#http://113.100.193.10:9901/tsfile/live/1000_1.m3u8','90');");
-			$this->exec("INSERT INTO `list` (`item`,`title`,`epg`,`url`,`isdel`) VALUES ('直播频道','CCTV2','','http://dbiptv.sn.chinamobile.com/PLTV/88888893/224/3221226195/index.m3u8?0.smil','120');");
+			//$this->exec("INSERT INTO `list` (`item`,`title`,`epg`,`url`,`isdel`) VALUES ('广东频道','广州综合','','http://nas.jdshipin.com:8801/gztv.php?id=zhonghe','90');");
+			//$this->exec("INSERT INTO `list` (`item`,`title`,`epg`,`url`,`isdel`) VALUES ('广东频道','广州新闻','','http://nas.jdshipin.com:8801/gztv.php?id=xinwen#http://113.100.193.10:9901/tsfile/live/1000_1.m3u8','90');");
+			//$this->exec("INSERT INTO `list` (`item`,`title`,`epg`,`url`,`isdel`) VALUES ('直播频道','CCTV2','','http://dbiptv.sn.chinamobile.com/PLTV/88888893/224/3221226195/index.m3u8?0.smil','120');");
 			$this->exec("COMMIT;");
 		}
 	}
@@ -74,49 +77,78 @@ if ( $db != '0' ){
 	$channel->exec("INSERT or ignore INTO access_log (ip_address,access_time,url) VALUES ('{$ip}','{$time}','Create database');");
 	exit;	
 }
+
+
 // 获取网页数据
 function getContent($url)
 {
-	$process = curl_init($url);
-	curl_setopt($process, CURLOPT_RETURNTRANSFER, 1);
-	curl_setopt($process, CURLOPT_CONNECTTIMEOUT, 5); 
-	curl_setopt($process, CURLOPT_TIMEOUT, 45); 
-	// 设置启用SSL协议
-	if (strtoupper(substr($url, 0, 5)) == 'HTTPS')
-	{
-		curl_setopt($process, CURLOPT_SSL_VERIFYPEER, 0); #0
-		curl_setopt($process, CURLOPT_SSL_VERIFYHOST, 0);    #0 
-	} 
-	// 设置GZIP压缩
-	$isgz = false;
-	if (strtoupper(substr($url, -3)) == '.GZ')
-	{
-		curl_setopt($process, CURLOPT_ENCODING, 'gzip');
-		$isgz = true;
-	}
-	curl_setopt($process, CURLOPT_USERAGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36");
-	
-	$data = curl_exec($process);
-	if (curl_errno($process))
-	{
-		echo curl_errno($process) . curl_error($process) . "<br>";
-	}
-	curl_close($process);
-	if ($isgz)
-	{
-		$data = gzdecode($data);
-	}
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 45);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (EPG Bot)');
+    
+    // 支持重定向（解决 302 问题）
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
+    
+    // SSL 设置（即使 HTTP 也建议保留，以防重定向到 HTTPS）
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+    
+    curl_setopt($ch, CURLOPT_ENCODING, ""); // 自动解压
 
-	unset($process);
-	return $data;
+    $data = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $final_url = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL); // 实际请求的 URL
+    $error_no = curl_errno($ch);
+    curl_close($ch);
+
+    if ($error_no) {
+        echo "cURL Error [{$error_no}]: " . curl_error($ch) . " | URL: {$url}<br>";
+        return false;
+    }
+    
+    // 检查最终响应是否成功（允许 200, 可能重定向后是 200）
+    if ($http_code !== 200) {
+        echo "HTTP {$http_code} (final: {$final_url}) | Original URL: {$url}<br>";
+        return false;
+    }
+
+    // 手动解压 gzip（如果需要）
+    if (substr($data, 0, 2) === "\x1f\x8b") {
+        if (!function_exists('gzdecode')) {
+            echo "Error: gzdecode not available.<br>";
+            return false;
+        }
+        $decoded = @gzdecode($data);
+        if ($decoded === false) {
+            echo "Error: Failed to decode gzip data from {$url}<br>";
+            return false;
+        }
+        $data = $decoded;
+    }
+
+    return $data;
 }
 
-// 节目总表地址列表
 
+// 节目总表地址列表
+//   https://raw.githubusercontent.com/sparkssssssssss/epg/main/pp.xml.gz, 
 // $xmlurl = array("http://127.0.0.1/diyp/epg-28768806.xml"); //本地测试节目单
 // $xmlurl = array("https://raw.githubusercontent.com/sparkssssssssss/epg/main/pp.xml.gz", "http://epg.51zmt.top:8000/e.xml.gz", "https://epg.erw.cc/e.xml.gz"); //https gzip模式
-$xmlurl = array("https://gitee.com/taksssss/tv/raw/main/epg/112114.xml.gz", "http://e.erw.cc/cc.xml.gz","https://gitee.com/taksssss/tv/raw/main/epg/51zmt.xml.gz"); //https gzip模式
-// .
+// $xmlurl = array("https://gitee.com/taksssss/tv/raw/main/epg/112114.xml.gz", "http://e.erw.cc/cc.xml.gz","https://gitee.com/taksssss/tv/raw/main/epg/51zmt.xml.gz"); //https gzip模式
+// $xmlurl = array("http://e.erw.cc/cc.xml.gz", "https://gitee.com/taksssss/tv/raw/main/epg/epgpw_cn.xml.gz", "https://gitee.com/taksssss/tv/blob/main/epg/erw.xml.gz"); //https gzip模式
+
+//$xmlurl = array("https://gitee.com/taksssss/tv/raw/main/epg/erw.xml.gz", "https://gitee.com/taksssss/tv/raw/main/epg/epgpw_cn.xml.gz" , "https://e.erw.cc/cc.xml.gz" );
+
+//$xmlurl = array("https://e.erw.cc/e.xml", "http://epg.51zmt.top:8000/e.xml", "https://epg.136605.xyz/3days.xml");
+
+$xmlurl = array(
+        //  "https://epg.51zmt.top:8000/e.xml.gz",  
+	    "http://epg.51zmt.top:8000/e.xml.gz",   
+    	"https://e.erw.cc/cc.xml.gz"            //   
+);
 // 遍历xmlurl,同步epg xml数据源
 $oknum = 1;
 foreach ($xmlurl as $url)
@@ -125,20 +157,35 @@ foreach ($xmlurl as $url)
 	$channel->exec("delete from tmp_epg_channel");
 	$channel->exec("delete from tmp_epg_programme"); 
 	// 获取xml格式的节目单
+
 	$data = getContent($url);
-	if (!is_string($data))
-	{
-		echo "none. $url <br><br>" ;
-		continue;
+	if (!$data || !is_string($data)) {
+    		echo "Failed to get valid data from: {$url}<br><br>";
+    		continue;
 	}
-	else
-	{
-		echo "200  $url <br>" ;
-	} 
 
-	// 禁用外部实体加载，提高安全性并避免网络请求
-	libxml_disable_entity_loader(true);
+	// 尝试解析 XML
+	libxml_use_internal_errors(true);
+	$xml = simplexml_load_string($data, 'SimpleXMLElement', LIBXML_NOCDATA);
+	if ($xml === false) {
+		echo "XML parse failed for: {$url}<br>";
+	    	foreach (libxml_get_errors() as $error) {
+        		echo "XML Error: " . $error->message . "<br>";
+    		}
+    		libxml_clear_errors();
+    		continue; // 跳过这个 URL
+	}
+       	// 尝试检测是否是二进制 gzip（虽然理论上不会出现）
+	if (substr($data, 0, 2) === "\x1f\x8b") {
+    		echo "Warning: Data still gzipped! Check cURL encoding setting. URL: {$url}<br>";
+    		$data = gzdecode($data);
+    		if ($data === false) {
+        		echo "Failed to manually decode gzip. Skip.<br>";
+        		continue;
+         	}
+         }
 
+        ////////////////////////////////////////////  20260224
 	// 尝试解析 XML
 	$xml = simplexml_load_string($data);
 
@@ -262,7 +309,8 @@ foreach ($xmlurl as $url)
 		// 统计节目单增加条目数
 		$count = $channel->querySingle("SELECT count(*) FROM 'epg_programme'") - $count;
 		$channel->exec("INSERT INTO access_log (ip_address,access_time,url) VALUES ('xml2db_add','{$time}','{$count}');");
-		echo "done, add " . $count . '<br><br>'; 
+		//echo "done, add " . $count . '<br><br>'; 
+		echo "done, add {$count} from " . basename($url) . "<br><br>";       // log 20260224
 		if ($empty_tmp == 1)
 		{ 
 			// 清空临时表
