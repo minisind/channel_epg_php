@@ -1,6 +1,6 @@
 <?php
 error_reporting(1);
-session_start();
+session_start();           //;
 /**
  * SuExplorer.php
  * 在线php/ini/conf/sh等脚本文件编辑器, 不依赖ftp和服务器帐号(单页绿色文件,方便部署)
