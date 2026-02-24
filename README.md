@@ -248,6 +248,7 @@
 ---
 
 感谢原作者 ：　oushaoming　（ https://github.com/oushaoming/channel_epg_php　）　　　
+
 修改说明：　下载了原作者的脚本后，在自己的　ｏｐｅｎｗｒｔ　老年机中（MT7621硬件,　ImmortalWrt 24.10.4 ＋ PHP8）部署时发现了一些错误，通过　AI　多轮改进调试，现在已经部署成功。在此保存部署成功之后修改的版本。　
 
 
