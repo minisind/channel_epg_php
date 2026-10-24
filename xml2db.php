@@ -17,12 +17,13 @@ XML 解析两次，失败直接 exit	只解析一次，失败 continue
 时间格式脆弱（带时区）	parseEpgTime() 只取数字部分再解析
 $e_date 计算了却没用	保留跨天判断逻辑，插入仍用 b_date（兼容播放器）
 display-name 访问方式	使用 $node->{'display-name'}
+内存/超时偏小	调整为 80M / 90 秒
 错误报告几乎关闭	改为 E_ALL，显示关闭（可按需打开）
 
 */
 
 ini_set('memory_limit', '80M');
-ini_set('max_execution_time', 24);
+ini_set('max_execution_time', 30);
 
 // ========== 配置项 ==========
 $save_all     = 1;   // 1=保存全量节目单, 0=仅保存 list 中频道相关的节目单
@@ -35,7 +36,8 @@ error_reporting(E_ALL);
 ini_set('display_errors', 0); // 生产环境建议关闭显示，错误写入日志
 
 $db_param = !empty($_GET['db']) ? $_GET['db'] : '0';
-$start_time = microtime(true);
+// $start_time = microtime(true);
+$script_start = microtime(true);
 $now = date('Y-m-d H:i:s');
 $today = date('Y-m-d');
 
@@ -435,12 +437,11 @@ foreach ($xmlurl as $xml_src) {
 }
 
 // 收尾
-$executionTime = number_format(microtime(true) - $start_time, 4);
-logAccess($channel, 'xml2db_cost', $now, $executionTime);
 
+$executionTime = number_format(microtime(true) - $script_start, 4);
+logAccess($channel, 'xml2db_cost', $now, $executionTime);
 $channel->exec('COMMIT;');
 $channel->close();
-
 echo "fetch xml epg data total cost {$executionTime} s. (total added: {$total_added})";
 
 ?>
