@@ -1,17 +1,17 @@
 <?php 
 // xml2db.php 联网获取xml格式的节目表存如sqlite数据库,为本地提供DIYP epg接口服务
-// author:　minisind   from  oushaoming (aming.ou)
+// author: aming.ou
 // http://127.0.0.1/xml2db.php       同步xml数据
 // http://127.0.0.1/xml2db.php?db=1  仅创建数据库,不同步xml数据
 
-ini_set('memory_limit', '32M');
+ini_set('memory_limit', '80M');
 ini_set('max_execution_time', 60);
 
-$save_all = 1; // 1 保存全量节目单, 0 仅保存list中频道相关的节目单
-$empty_tmp = 1; // 1 入库后清除临时表的数据, 0 保留临时表的数据,建议调测期间设置为0, 调测完毕后修改为1,减少存储空间
-$deleteoffset = -3; // 清理xx天前的节目数据
-$deletetoday = 1; // 更新数据前先删除当天节目数据
-error_reporting(1); // 禁止输出错误提示
+$save_all = 1;       // 1 保存全量节目单, 0 仅保存list中频道相关的节目单
+$empty_tmp = 1;      // 1 入库后清除临时表的数据, 0 保留临时表的数据,建议调测期间设置为0, 调测完毕后修改为1,减少存储空间
+$deleteoffset = -2;  // 清理xx天前的节目数据
+$deletetoday = 1;    // 更新数据前先删除当天节目数据
+error_reporting(1);  // 禁止输出错误提示
 $displayname = 'display-name';
 $n = 0;
 $inserttype = 'ignore'; // replace  or ignore
@@ -136,8 +136,6 @@ function getContent($url)
 // 节目总表地址列表
 //   https://raw.githubusercontent.com/sparkssssssssss/epg/main/pp.xml.gz, 
 // $xmlurl = array("http://127.0.0.1/diyp/epg-28768806.xml"); //本地测试节目单
-// $xmlurl = array("https://raw.githubusercontent.com/sparkssssssssss/epg/main/pp.xml.gz", "http://epg.51zmt.top:8000/e.xml.gz", "https://epg.erw.cc/e.xml.gz"); //https gzip模式
-// $xmlurl = array("https://gitee.com/taksssss/tv/raw/main/epg/112114.xml.gz", "http://e.erw.cc/cc.xml.gz","https://gitee.com/taksssss/tv/raw/main/epg/51zmt.xml.gz"); //https gzip模式
 // $xmlurl = array("http://e.erw.cc/cc.xml.gz", "https://gitee.com/taksssss/tv/raw/main/epg/epgpw_cn.xml.gz", "https://gitee.com/taksssss/tv/blob/main/epg/erw.xml.gz"); //https gzip模式
 
 //$xmlurl = array("https://gitee.com/taksssss/tv/raw/main/epg/erw.xml.gz", "https://gitee.com/taksssss/tv/raw/main/epg/epgpw_cn.xml.gz" , "https://e.erw.cc/cc.xml.gz" );
@@ -145,9 +143,10 @@ function getContent($url)
 //$xmlurl = array("https://e.erw.cc/e.xml", "http://epg.51zmt.top:8000/e.xml", "https://epg.136605.xyz/3days.xml");
 
 $xmlurl = array(
-        //  "https://epg.51zmt.top:8000/e.xml.gz",  
-	    "http://epg.51zmt.top:8000/e.xml.gz",   
-    	"https://e.erw.cc/cc.xml.gz"            //   
+        //  "https://epg.v1.mk/fy.xml.gz", 
+        "https://live.zhi35.com/epg.xml.gz",
+        "https://e.erw.cc/cc.xml.gz"     //,             // 你已成功下载这个（说明它小）
+	//"https://raw.githubusercontent.com/CCSH/IPTV/main/e.xml.gz"  
 );
 // 遍历xmlurl,同步epg xml数据源
 $oknum = 1;
