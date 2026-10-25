@@ -105,7 +105,12 @@
 
 ### 2. 安装和初始化
 
-1. 将所有文件部署到Web服务器的根目录或子目录
+2.1 * 依赖安装： 在 路由器环境安装时，需要安装PHP的相关插件包： php8  php8-cgi  php8-fastcgi  php8-mod-curl  php8-mod-dom  php8-mod-gettext  php8-mod-openssl  php8-mod-pdo  php8-mod-pdo-sqlite   php8-mod-simplexml  php8-mod-soap  php8-mod-sqlite3  php8-mod-xml  php8-mod-xmlreader  php8-mod-xmlwriter	
+
+2.2 本项目安装：
+   建议在路由器 www目录下新建子目录， 如 iptv/egp
+   
+1. 将所有文件部署到Web服务器的根目录或子目录 ( www/iptv/egp )
 2. 确保Web服务器有写入权限（特别是imgs目录）
 3. 访问 `xml2db.php` 初始化数据库（自动创建channel_epg.db）
 4. 配置 `xml2db.php` 中的EPG数据源URL
